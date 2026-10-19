@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <poll.h>
+#include <signal.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -113,11 +115,40 @@ int cm_io_wait(const cm_io *io, int want_write, int timeout_ms)
     return wait_fd(io->ops->fd(io->ctx), want_write, timeout_ms);
 }
 
+/* A write to a peer-closed socket must give EPIPE, not kill the process. send(MSG_NOSIGNAL) covers
+ * the plain path, but OpenSSL writes with write(2), so also make sure SIGPIPE is not fatal: use
+ * SO_NOSIGPIPE where it exists, and otherwise ignore SIGPIPE if the application left the default. */
+static void no_sigpipe(int fd)
+{
+#ifdef SO_NOSIGPIPE
+    int one = 1;
+
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#else
+    (void)fd;
+#endif
+#ifdef SIGPIPE
+    {
+        struct sigaction cur;
+
+        if (sigaction(SIGPIPE, NULL, &cur) == 0 && cur.sa_handler == SIG_DFL) {
+            cur.sa_handler = SIG_IGN;
+            sigaction(SIGPIPE, &cur, NULL);
+        }
+    }
+#endif
+}
+
 static cm_err tcp_connect_fd(int *out, const char *host, const char *port, int timeout_ms)
 {
     struct addrinfo hints, *res, *ai;
     cm_err result = CM_ERR_IO;
 
+#ifndef MSG_NOSIGNAL
+    /* no per-call way to suppress SIGPIPE on this platform: a peer that closed the socket must not
+     * kill the process, so the signal is ignored process-wide (documented in README) */
+    signal(SIGPIPE, SIG_IGN);
+#endif
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -130,6 +161,7 @@ static cm_err tcp_connect_fd(int *out, const char *host, const char *port, int t
 
         if (fd < 0)
             continue;
+        no_sigpipe(fd);
         set_nonblock(fd, 1);
         if (connect(fd, ai->ai_addr, ai->ai_addrlen) != 0 && errno != EINPROGRESS) {
             close(fd);

@@ -22,7 +22,7 @@ struct cmi_waiter {
 struct cm_client {
     cm_device *dev;
     cm_client_opts opts;
-    char *host, *port, *save_path, *ca_file;
+    char *host, *port, *save_path, *ca_file, *tmp_dir;
     cm_conn *conn;
     cm_event_cb cb;
     void *ud;

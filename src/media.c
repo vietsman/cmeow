@@ -883,11 +883,36 @@ out:
     return e;
 }
 
+/* Scratch file for the encrypted upload body: in opts.tmp_dir when given (unlinked right after
+ * creation so nothing is left behind), else tmpfile(). */
+static FILE *scratch_file(cm_client *c)
+{
+    static unsigned seq;
+    char *name;
+    FILE *f;
+    uint8_t r[4];
+    size_t n;
+
+    if (c->tmp_dir == NULL || c->tmp_dir[0] == '\0')
+        return tmpfile();
+    n = strlen(c->tmp_dir) + 40;
+    name = (char *)malloc(n);
+    if (name == NULL)
+        return NULL;
+    cm_random(r, sizeof r);
+    sprintf(name, "%s/cmeow-%02x%02x%02x%02x-%u.tmp", c->tmp_dir, r[0], r[1], r[2], r[3], ++seq);
+    f = fopen(name, "w+b");
+    if (f != NULL)
+        remove(name);
+    free(name);
+    return f;
+}
+
 cm_err cm_client_upload_stream(cm_client *c, cm_media_read_cb rd, void *ud, cm_media_type t, cm_upload_resp *out)
 {
     cm_media_keys k;
     EVP_CIPHER_CTX *cc = EVP_CIPHER_CTX_new();
-    FILE *tmp = tmpfile();
+    FILE *tmp = scratch_file(c);
     hm mac;
     sha plain, enc;
     uint8_t in[4096], ob[4096 + 32], digest[32];
@@ -946,7 +971,15 @@ cm_err cm_client_upload_stream(cm_client *c, cm_media_read_cb rd, void *ud, cm_m
     sha_fin(&enc, out->file_enc_sha256);
     started = 0;
     out->file_length = total;
-    upsize = (uint64_t)ftell(tmp);
+    {
+        long pos = ftell(tmp);
+
+        if (pos < 0) {
+            e = CM_ERR_TOO_LARGE; /* > 2 GiB on 32-bit platforms */
+            goto out;
+        }
+        upsize = (uint64_t)pos;
+    }
     e = raw_upload(c, tmp, NULL, upsize, out->file_enc_sha256, "mms", cm_media_mms_type(t), out);
 out:
     if (started) {

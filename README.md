@@ -57,15 +57,22 @@ accepted for this project.
 
 ## Build and test
 
-    make OPENSSL_DIR=/path/to/openssl    # build/libcmeow.a
-    make test OPENSSL_DIR=...            # self-contained tests, plain C, no other toolchain
-    make test SAN="-fsanitize=address,undefined -g -O1" ...   # optional, gcc >= 4.8 / clang only
+    make OPENSSL_DIR=/path/to/openssl ZLIB_DIR=/path/to/zlib   # build/libcmeow.a
+    make install PREFIX=/usr/local                              # headers + libcmeow.a
+    make test OPENSSL_DIR=...      # self-contained tests (host only), plain C
+    make test SAN="-fsanitize=address,undefined -g -O1" ...    # optional, gcc >= 4.8 / clang
 
-BlackBerry 10 (bbndk, gcc 4.6): set the cross compiler and archiver from the NDK environment, and the
-link libraries for QNX, e.g. `make CC=qcc AR=ntoarmv7-ar CFLAGS="-Vgcc_ntoarmv7le -O2"
-SYSLIBS="-lz -lsocket" OPENSSL_DIR=...` (adjust the names to your NDK; `make` itself only needs
-`CC`, `AR`, `CFLAGS`). The tests link the whole library plus `SYSLIBS`; `libcmeow.a` itself has no
-extra requirements besides your static OpenSSL and zlib.
+The Makefile is platform-neutral. `CC`, `AR`, `RANLIB`, `CFLAGS`, `CPPFLAGS`, `LDFLAGS`, `LIBS`,
+`BUILD`, `PREFIX`/`LIBDIR`/`INCLUDEDIR`/`DESTDIR`, `OPENSSL_DIR` and `ZLIB_DIR` all come from the
+environment or the command line (an empty `OPENSSL_DIR`/`ZLIB_DIR` means the compiler's default
+paths). `OPENSSL_DIR`/`ZLIB_DIR` are install prefixes with `include/` and `lib/` (or `lib64/`).
+Cross builds: one `BUILD` directory per target. Programs linking `libcmeow.a` also need OpenSSL,
+zlib and whatever your platform's static OpenSSL needs (`-ldl -lpthread` on Linux, `-lsocket` on QNX).
+
+**BlackBerry 10 (bbndk, gcc 4.6):** `build_cmeow.sh` builds and installs armv7 and x86 into
+`/root/bb10/libraries/cmeow/<arch>/{include,lib}`, using `/root/bb10/libraries/{openssl,zlib}/<arch>`
+(override with `BASE_DIR`). It only calls `make` with the right variables; adapt or copy it for
+other platforms.
 
 Tests: `test_binary` (codec), `test_crypto` (primitives vs. RFC vectors, frame
 parser at many chunk sizes, Noise), `test_handshake` (mock server, every cert
@@ -91,12 +98,13 @@ unit-level checks only. `account` stores the self-signed device identity
 ## Compiler compatibility
 
 Written for gcc 4.6 (BlackBerry 10 NDK): strict `-std=c99 -Wall -Wextra
--Wpedantic -Wshadow -Wconversion -Wdeclaration-after-statement` is clean on
+-pedantic -Wshadow -Wconversion -Wdeclaration-after-statement` is clean on
 gcc 13, and no C11 features or post-4.6 builtins are used. **gcc 4.6 itself was
 not available here, so this is an audit, not a build.** The generated protobuf
 code uses anonymous unions for oneofs (a GNU extension that gcc 4.6 accepts),
 so `src/proto` and vendored code are built without `-pedantic`.
-`net.c` uses POSIX sockets (`getaddrinfo`, `poll`), which QNX provides.
+`net.c` uses POSIX sockets (`getaddrinfo`, `poll`), which QNX provides. Where `MSG_NOSIGNAL` is
+missing, `SIGPIPE` is ignored process-wide on the first connect.
 
 ## Deviations from the Go behaviour
 

@@ -108,6 +108,7 @@ cm_client *cm_client_new(cm_device *dev, const cm_client_opts *opts)
     c->host = cm_strdup(opts && opts->host ? opts->host : "web.whatsapp.com");
     c->port = cm_strdup(opts && opts->port ? opts->port : "443");
     c->ca_file = opts && opts->ca_file ? cm_strdup(opts->ca_file) : NULL;
+    c->tmp_dir = opts && opts->tmp_dir ? cm_strdup(opts->tmp_dir) : NULL;
     cm_random(r, 4);
     sprintf(p, "%u.%u-", (unsigned)(r[0] << 8 | r[1]), (unsigned)(r[2] << 8 | r[3]) % 100);
     c->id_prefix = cm_strdup(p);
@@ -116,6 +117,7 @@ cm_client *cm_client_new(cm_device *dev, const cm_client_opts *opts)
         return NULL;
     }
     c->opts.host = c->opts.port = c->opts.ca_file = NULL;
+    c->opts.tmp_dir = NULL;
     return c;
 }
 
@@ -187,6 +189,7 @@ void cm_client_free(cm_client *c)
     free(c->host);
     free(c->port);
     free(c->ca_file);
+    free(c->tmp_dir);
     free(c->save_path);
     free(c->id_prefix);
     free(c->keepalive_id);

@@ -80,6 +80,8 @@ typedef struct cm_client_opts {
     int plain_tcp;           /* testing only: skip TLS */
     const uint8_t *root_pub; /* testing only: certificate root override */
     int timeout_ms;          /* connect / handshake step timeout (default 20000) */
+    const char *tmp_dir;     /* writable directory for media-upload scratch files (NULL = tmpfile(); needed on
+                              * sandboxed platforms where the system temp dir is not writable) */
     cm_io *connect_io;       /* testing only: use this transport for the next connect */
 } cm_client_opts;
 

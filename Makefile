@@ -1,36 +1,73 @@
 # cmeow - C99 port of whatsmeow
 #
 # Targets:
-#   make                build/libcmeow.a (cmeow + vendored libsignal-protocol-c,
-#                       protobuf-c runtime and the generated whatsmeow protobufs)
-#   make test           build and run the self-contained tests (SAN=... adds sanitizers on gcc >= 4.8)
-#   make protos         regenerate src/proto/ (needs protoc + protoc-gen-c, dev only)
-#   make tokens         regenerate src/tokens_gen.c from a whatsmeow checkout
+#   make                build $(BUILD)/libcmeow.a (cmeow + vendored libsignal-protocol-c, protobuf-c
+#                       runtime, wslay and the generated whatsmeow protobufs)
+#   make test           build and run the self-contained tests (host only)
+#   make install        install libcmeow.a and the headers under $(PREFIX)
+#   make protos         regenerate src/proto/ (dev only: protoc + protoc-gen-c, see below)
+#   make tokens         regenerate src/tokens_gen.c from a whatsmeow checkout (dev only)
 #   make clean
 #
-# OpenSSL (3.3.x, static) is NOT vendored: point OPENSSL_DIR at a build/install
-# tree containing include/ and libcrypto.a/libssl.a (a source tree that has been
-# built in place works too).
+# Usual variables (all optional):
+#   CC AR RANLIB        toolchain; set these for cross builds
+#   CFLAGS CPPFLAGS LDFLAGS LIBS
+#   PREFIX DESTDIR LIBDIR INCLUDEDIR   install locations (default PREFIX=/usr/local)
+#   BUILD               output directory (default build); use one per target when cross-compiling
+#   OPENSSL_DIR         prefix of a (static) OpenSSL 3.x with include/ and lib/ (or lib64/); when
+#                       unset the compiler's default search paths and -lssl -lcrypto are used
+#   ZLIB_DIR            same for zlib; when unset -lz is used
+#   LIBS                extra link libraries for the tests (system libs OpenSSL needs, e.g. -lsocket,
+#                       -ldl -lpthread); defaults to a guess from `uname -s`
+#   SAN                 sanitizer flags for the tests, e.g. "-fsanitize=address,undefined -g -O1"
+#
+# For BlackBerry 10 (bbndk) see build_cmeow.sh.
 
+# Toolchain: every variable below can come from the environment or the command line, as with any
+# autoconf-less library (cross builds: CC=... AR=... RANLIB=... make).
 CC      ?= cc
 AR      ?= ar
+RANLIB  ?= ranlib
 CFLAGS  ?= -O2
+LDFLAGS ?=
 
-OPENSSL_DIR  ?= third_party/openssl
+BUILD   ?= build
+PREFIX  ?= /usr/local
+LIBDIR  ?= $(PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include
+
+# Dependencies (not vendored): OpenSSL 3.x and zlib. Each DIR is an install prefix (include/ and lib/
+# or lib64/), or for OpenSSL a source tree built in place. When a DIR is empty the compiler's default
+# search paths are used.
+OPENSSL_DIR  ?=
+ZLIB_DIR     ?=
+ifneq ($(OPENSSL_DIR),)
 OPENSSL_INC  := -I$(OPENSSL_DIR)/include
-OPENSSL_LIBS := $(firstword $(wildcard $(OPENSSL_DIR)/libssl.a $(OPENSSL_DIR)/lib/libssl.a)) \
-                $(firstword $(wildcard $(OPENSSL_DIR)/libcrypto.a $(OPENSSL_DIR)/lib/libcrypto.a))
-# Extra libraries for linking the tests. Override for your target, e.g. BlackBerry 10 (QNX) needs
-# the socket library and has no separate libpthread/libdl:  SYSLIBS="-lz -lsocket"
-SYSLIBS      ?= -lz -ldl -lpthread
+OPENSSL_LIBS := $(firstword $(wildcard $(OPENSSL_DIR)/libssl.a $(OPENSSL_DIR)/lib/libssl.a $(OPENSSL_DIR)/lib64/libssl.a)) \
+                $(firstword $(wildcard $(OPENSSL_DIR)/libcrypto.a $(OPENSSL_DIR)/lib/libcrypto.a $(OPENSSL_DIR)/lib64/libcrypto.a))
+else
+OPENSSL_INC  :=
+OPENSSL_LIBS := -lssl -lcrypto
+endif
+ifneq ($(ZLIB_DIR),)
+ZLIB_INC     := -I$(ZLIB_DIR)/include
+ZLIB_LIBS    := $(firstword $(wildcard $(ZLIB_DIR)/lib/libz.a $(ZLIB_DIR)/lib64/libz.a $(ZLIB_DIR)/libz.a))
+else
+ZLIB_INC     :=
+ZLIB_LIBS    := -lz
+endif
+
+# Libraries needed to link programs against libcmeow.a (the tests). The platform's static OpenSSL
+# may need more (Linux: -ldl -lpthread; QNX/BlackBerry 10: -lsocket); override LIBS for your target.
+LIBS ?= $(if $(filter Linux,$(shell uname -s 2>/dev/null)),-ldl -lpthread,)
 
 # Our own code: strict.
-CSTD    := -std=c99 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes
-INCLUDE := -Iinclude -Ithird_party/libsignal -Ithird_party/protobuf-c -isystem src/proto -Ithird_party/wslay $(OPENSSL_INC)
+CSTD    := -std=c99 -pedantic -Wall -Wextra -Wshadow -Wstrict-prototypes
+INCLUDE := -Iinclude -Ithird_party/libsignal -Ithird_party/protobuf-c -isystem src/proto -Ithird_party/wslay $(OPENSSL_INC) $(ZLIB_INC) $(CPPFLAGS)
 
 # Vendored / generated code: C99, warnings left to upstream.
 VENDOR_FLAGS := -std=c99 -w
-VENDOR_INC   := -DHAVE_CONFIG_H -Ithird_party/wslay -Iinclude -Ithird_party/protobuf-c -Ithird_party/libsignal -isystem src/proto $(OPENSSL_INC)
+VENDOR_INC   := -DHAVE_CONFIG_H -Ithird_party/wslay -Iinclude -Ithird_party/protobuf-c -Ithird_party/libsignal -isystem src/proto $(OPENSSL_INC) $(ZLIB_INC) $(CPPFLAGS)
 
 CM_SRC := $(sort $(wildcard src/*.c))
 
@@ -65,32 +102,33 @@ WS_SRC := $(addprefix $(WS_DIR)/,wslay_event.c wslay_frame.c wslay_net.c wslay_q
 PBC_SRC   := third_party/protobuf-c/protobuf-c/protobuf-c.c
 PROTO_SRC := $(sort $(wildcard src/proto/*/*.pb-c.c))
 
-CM_OBJ    := $(CM_SRC:%.c=build/%.o)
-VENDOR_OBJ:= $(LS_SRC:%.c=build/%.o) $(PBC_SRC:%.c=build/%.o) $(WS_SRC:%.c=build/%.o) $(PROTO_SRC:%.c=build/%.o)
+CM_OBJ    := $(CM_SRC:%.c=$(BUILD)/%.o)
+VENDOR_OBJ:= $(LS_SRC:%.c=$(BUILD)/%.o) $(PBC_SRC:%.c=$(BUILD)/%.o) $(WS_SRC:%.c=$(BUILD)/%.o) $(PROTO_SRC:%.c=$(BUILD)/%.o)
 
 # Sanitizers are optional (gcc 4.6 has none). Host build example:
 #   make test SAN="-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1"
 SAN ?=
 
-all: build/libcmeow.a
+all: $(BUILD)/libcmeow.a
 
-build/src/%.o: src/%.c $(wildcard include/*.h)
+$(BUILD)/src/%.o: src/%.c $(wildcard include/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CSTD) $(CFLAGS) $(INCLUDE) -c $< -o $@
 
 # the vendored libsignal needs its own include dirs; the generated protos and
 # protobuf-c are C99 but use anonymous unions for oneofs (a GNU extension in
 # gcc 4.6, standard C11), so they are compiled without -pedantic.
-build/third_party/%.o: third_party/%.c
+$(BUILD)/third_party/%.o: third_party/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(VENDOR_FLAGS) $(CFLAGS) $(VENDOR_INC) $(LS_INC) -c $< -o $@
 
-build/src/proto/%.o: src/proto/%.c
+$(BUILD)/src/proto/%.o: src/proto/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(VENDOR_FLAGS) -Os $(VENDOR_INC) -c $< -o $@
+	$(CC) $(VENDOR_FLAGS) $(CFLAGS) $(VENDOR_INC) -c $< -o $@
 
-build/libcmeow.a: $(CM_OBJ) $(VENDOR_OBJ)
+$(BUILD)/libcmeow.a: $(CM_OBJ) $(VENDOR_OBJ)
 	$(AR) rcs $@ $^
+	$(RANLIB) $@
 
 # ---- tests (compile the library sources directly) ----
 TEST_SRC := $(CM_SRC)
@@ -98,11 +136,11 @@ TEST_SRC := $(CM_SRC)
 # Our code is rebuilt with $(SAN) if given; the vendored objects are linked as-is.
 # every tests/test_*.c is a test program; a bare name on the command line works too
 TEST_NAMES := $(basename $(notdir $(wildcard tests/test_*.c)))
-TEST_BINS  := $(addprefix build/,$(TEST_NAMES))
+TEST_BINS  := $(addprefix $(BUILD)/,$(TEST_NAMES))
 
-build/test_%: tests/test_%.c $(wildcard tests/*.inc) $(TEST_SRC) $(VENDOR_OBJ)
-	@mkdir -p build
-	$(CC) $(CSTD) $(SAN) $(INCLUDE) -Itests -Isrc $< $(TEST_SRC) $(VENDOR_OBJ) -o $@ $(OPENSSL_LIBS) $(SYSLIBS)
+$(BUILD)/test_%: tests/test_%.c $(wildcard tests/*.inc) $(TEST_SRC) $(VENDOR_OBJ)
+	@mkdir -p $(BUILD)
+	$(CC) $(CSTD) $(SAN) $(INCLUDE) -Itests -Isrc $< $(TEST_SRC) $(VENDOR_OBJ) -o $@ $(LDFLAGS) $(OPENSSL_LIBS) $(ZLIB_LIBS) $(LIBS)
 
 test: $(TEST_BINS)
 	@for t in $(TEST_BINS); do echo "== $$t"; ./$$t || exit 1; done
@@ -113,14 +151,23 @@ protos:
 	rm -rf src/proto && mkdir -p src/proto
 	cd $(WHATSMEOW)/proto && for f in */*.proto; do protoc -I. --c_out=$(CURDIR)/src/proto $$f || exit 1; done
 
-build/gen_tokens: tools/gen_tokens.c
-	@mkdir -p build
+$(BUILD)/gen_tokens: tools/gen_tokens.c
+	@mkdir -p $(BUILD)
 	$(CC) $(CSTD) $(CFLAGS) $< -o $@
 
-tokens: build/gen_tokens
-	build/gen_tokens $(WHATSMEOW)/binary/token/token.go src/tokens_gen.c
+tokens: $(BUILD)/gen_tokens
+	$(BUILD)/gen_tokens $(WHATSMEOW)/binary/token/token.go src/tokens_gen.c
+
+install: $(BUILD)/libcmeow.a
+	mkdir -p $(DESTDIR)$(LIBDIR) $(DESTDIR)$(INCLUDEDIR)
+	cp $(BUILD)/libcmeow.a $(DESTDIR)$(LIBDIR)/
+	cp include/*.h $(DESTDIR)$(INCLUDEDIR)/
+
+uninstall:
+	rm -f $(DESTDIR)$(LIBDIR)/libcmeow.a
+	for h in include/*.h; do rm -f $(DESTDIR)$(INCLUDEDIR)/$$(basename $$h); done
 
 clean:
-	rm -rf build
+	rm -rf $(BUILD)
 
-.PHONY: all test protos tokens clean
+.PHONY: all test install uninstall protos tokens clean
